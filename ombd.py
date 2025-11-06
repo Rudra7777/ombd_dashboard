@@ -33,8 +33,8 @@ Notes:
 BUDGET_INR = 100000
 LOOKBACK_DAYS = 252  # ~1 trading year
 DEFAULT_MIN_STOCK_PCT = 0.0
-DEFAULT_MAX_STOCK_PCT = 0.10
-DEFAULT_MAX_SECTOR_PCT = 0.40
+DEFAULT_MAX_STOCK_PCT = 0.05
+DEFAULT_MAX_SECTOR_PCT = 0.25
 TARGET_RETURN_ANNUAL = None
 TRANSACTION_COST_PCT = 0.0005
 DEFAULT_OUTPUT_FILE = 'nifty50_optimized_allocation_with_dashboard.xlsx'
@@ -450,11 +450,6 @@ with main_col:
         if mv_alloc_pos.empty:
             st.warning('No invested capital could be computed—price data may be missing. Try refreshing prices or adjusting the lookback window.')
         else:
-            display_cols = ['Company','Ticker','Sector','Price','Shares','Invested','PctPortfolio','WeightPct']
-            display_df = mv_alloc_pos.nlargest(15, 'PctPortfolio')[display_cols].copy()
-            display_df.index = np.arange(1, len(display_df) + 1)
-            st.dataframe(display_df, use_container_width=True)
-
             # Portfolio summary stats
             invested_total = mv_alloc_pos['Invested'].sum()
             expected_return = float(mv_weights.values @ mu.values)
@@ -469,6 +464,19 @@ with main_col:
             summary_cols[2].metric('Annual volatility (risk)', f"{portfolio_vol*100:.2f}%")
             summary_cols[3].metric('Sharpe Ratio', f"{sharpe_ratio:.2f}")
 
+            display_cols = ['Company','Ticker','Sector','Price','Shares','Invested','PctPortfolio','WeightPct']
+            display_df = mv_alloc_pos.nlargest(15, 'PctPortfolio')[display_cols].copy()
+            display_df.index = np.arange(1, len(display_df) + 1)
+            st.dataframe(display_df, use_container_width=True)
+
+            # Sector diversification table
+            sector_table = mv_alloc_pos.groupby('Sector').agg({'Invested':'sum', 'PctPortfolio':'sum'}).reset_index()
+            sector_table = sector_table.sort_values('PctPortfolio', ascending=False)
+            sector_table['Invested'] = sector_table['Invested'].map(lambda x: f"{x:,.0f}")
+            sector_table['PctPortfolio'] = sector_table['PctPortfolio'].map(lambda x: f"{x:.2f}%")
+            st.markdown('### Sector Diversification')
+            st.dataframe(sector_table.rename(columns={'Invested':'Invested (INR)', 'PctPortfolio':'Portfolio %'}), use_container_width=True)
+
             total_invested = mv_alloc_pos['PctPortfolio'].sum()
             fig = px.treemap(
                 mv_alloc_pos,
@@ -476,8 +484,63 @@ with main_col:
                 values='PctPortfolio',
                 color='PctPortfolio',
                 color_continuous_scale=px.colors.sequential.Viridis,
+                custom_data=['PctPortfolio'],
                 title='Portfolio Allocation Treemap (Mean-Variance)',
                 hover_data={'Ticker': True, 'Invested': ':.2f', 'PctPortfolio': ':.2f', 'WeightPct': ':.2f'}
+            )
+
+            def _wrap_label(lbl, width=14):
+                words = str(lbl).split()
+                lines = []
+                current = ''
+                for word in words:
+                    tentative = f"{current} {word}".strip()
+                    if len(tentative) <= width:
+                        current = tentative
+                    else:
+                        if current:
+                            lines.append(current)
+                        current = word
+                if current:
+                    lines.append(current)
+                return '<br>'.join(lines)
+
+            labels = fig.data[0].labels
+            parents = fig.data[0].parents
+            custom_vals = fig.data[0].customdata[:, 0] if fig.data[0].customdata is not None else np.repeat(np.nan, len(labels))
+
+            formatted_text = []
+            for label, parent, pct in zip(labels, parents, custom_vals):
+                if parent == '':
+                    formatted_text.append('')  # root node — no label
+                    continue
+                try:
+                    pct_val = float(pct)
+                except (TypeError, ValueError):
+                    pct_val = np.nan
+
+                if np.isnan(pct_val):
+                    pct_val = 0.0
+
+                if pct_val >= 6:
+                    font_size = 20
+                elif pct_val >= 3:
+                    font_size = 16
+                elif pct_val >= 1.5:
+                    font_size = 14
+                else:
+                    font_size = 12
+
+                wrapped_label = _wrap_label(label, width=12)
+                formatted_text.append(
+                    f"<span style='font-size:{font_size}px'><b>{wrapped_label}</b><br>{pct_val:.2f}%</span>"
+                )
+
+            fig.data[0].text = formatted_text
+            fig.update_traces(
+                texttemplate='%{text}',
+                textfont=dict(color='black'),
+                textposition='middle center'
             )
             fig.update_layout(margin=dict(t=40, l=0, r=0, b=0))
 
