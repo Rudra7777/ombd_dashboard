@@ -8,3 +8,4 @@ streamlit
 plotly
 scipy
 openpyxl
+lxml
